@@ -45,7 +45,19 @@ MLP_DIMS = 2048    # do not change: width of the trained denoiser
 ################################################################################
 
 def canonicalize(smiles, include_stereocenters=True):
-    """Canonical SMILES via RDKit, or None if the molecule does not parse."""
+    """Converts a SMILES string to its RDKit canonical form.
+
+    Args:
+        smiles: SMILES string to canonicalize.
+        include_stereocenters: Whether to keep stereochemistry in the output.
+
+    Returns:
+        The canonical SMILES, or None if the molecule does not parse.
+
+    Example:
+        >>> canonicalize('OCC')
+        'CCO'
+    """
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return None
@@ -56,7 +68,18 @@ def canonicalize(smiles, include_stereocenters=True):
 
 
 def remove_duplicates(list_with_duplicates):
-    """Drop duplicates, keeping the first occurrence and the original order."""
+    """Drops duplicates, keeping the first occurrence and the original order.
+
+    Args:
+        list_with_duplicates: List of hashable items.
+
+    Returns:
+        A new list with each item once.
+
+    Example:
+        >>> remove_duplicates(['a', 'b', 'a'])
+        ['a', 'b']
+    """
     unique_set = set()
     unique_list = []
     for element in list_with_duplicates:
@@ -67,13 +90,35 @@ def remove_duplicates(list_with_duplicates):
 
 
 def canonicalize_list(smiles_list, include_stereocenters=True):
-    """Canonicalize, drop unparseable molecules, then drop duplicates."""
+    """Canonicalizes a list of SMILES, dropping unparseable ones and duplicates.
+
+    Args:
+        smiles_list: SMILES strings to process.
+        include_stereocenters: Whether to keep stereochemistry.
+
+    Returns:
+        Unique canonical SMILES, in order of first appearance.
+    """
     canonical = [canonicalize(s, include_stereocenters) for s in smiles_list]
     return remove_duplicates([s for s in canonical if s is not None])
 
 
 def fingerprint(smiles, fp_type='morgan', morgan__r=2, morgan__n=1024):
-    """Fingerprint bit vector for one SMILES, or None if it does not parse."""
+    """Computes a fingerprint bit vector for one molecule.
+
+    Args:
+        smiles: SMILES string.
+        fp_type: ``'morgan'`` or ``'maccs'``.
+        morgan__r: Morgan radius (used only for ``'morgan'``).
+        morgan__n: Morgan bit-vector length (used only for ``'morgan'``).
+
+    Returns:
+        A uint8 array (length 166 for MACCS, ``morgan__n`` for Morgan), or None
+        if the molecule does not parse or sanitize.
+
+    Raises:
+        ValueError: If ``fp_type`` is not recognised.
+    """
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return None
@@ -94,15 +139,39 @@ def fingerprint(smiles, fp_type='morgan', morgan__r=2, morgan__n=1024):
 
 
 def fingerprints(smiles_list, **kwargs):
-    """Stack fingerprints of a list of SMILES, skipping the ones that fail."""
+    """Stacks the fingerprints of a list of SMILES, skipping the ones that fail.
+
+    Args:
+        smiles_list: SMILES strings.
+        **kwargs: Passed to ``fingerprint`` (``fp_type``, ``morgan__r``,
+            ``morgan__n``).
+
+    Returns:
+        A 2D uint8 array with one row per molecule that fingerprinted
+        successfully.
+    """
     fps = [fp for fp in map(partial(fingerprint, **kwargs), smiles_list) if fp is not None]
     return np.vstack(fps)
 
 
 def average_agg_tanimoto(stock_vecs, gen_vecs, batch_size=5000, agg='max', device='cpu', p=1):
-    """
-    For each molecule in gen_vecs, aggregate its Tanimoto similarity against
-    stock_vecs ('max' = nearest neighbour, 'mean' = average), then average.
+    """Averages, over gen_vecs, each molecule's aggregated Tanimoto similarity to stock_vecs.
+
+    Args:
+        stock_vecs: Binary fingerprint matrix of the reference set, one row per
+            molecule.
+        gen_vecs: Binary fingerprint matrix of the generated set.
+        batch_size: Number of rows of each matrix processed at a time.
+        agg: ``'max'`` for the nearest neighbour or ``'mean'`` for the average
+            similarity to the whole reference set.
+        device: Torch device for the matrix products.
+        p: Power mean exponent applied to the similarities (1 is a plain mean).
+
+    Returns:
+        The mean aggregated similarity as a float.
+
+    Raises:
+        AssertionError: If ``agg`` is not ``'max'`` or ``'mean'``.
     """
     assert agg in ['max', 'mean'], 'Can aggregate only max or mean'
     agg_tanimoto = np.zeros(len(gen_vecs))
@@ -132,13 +201,35 @@ def average_agg_tanimoto(stock_vecs, gen_vecs, batch_size=5000, agg='max', devic
 
 
 def internal_diversity(smiles, device='cpu', fp_type='morgan', p=1):
-    """1 - mean pairwise Tanimoto similarity within the set."""
+    """Computes internal diversity as 1 minus the mean pairwise Tanimoto similarity.
+
+    Args:
+        smiles: SMILES strings of the set.
+        device: Torch device for the similarity computation.
+        fp_type: Fingerprint type, ``'morgan'`` or ``'maccs'``.
+        p: Power mean exponent (1 is a plain mean).
+
+    Returns:
+        Diversity in [0, 1]; higher means the molecules are less alike.
+    """
     gen_fps = fingerprints(smiles, fp_type=fp_type)
     return 1 - average_agg_tanimoto(gen_fps, gen_fps, agg='mean', device=device, p=p)
 
 
 def has_radical(smiles):
-    """True if any atom carries unpaired electrons."""
+    """Checks whether any atom carries unpaired electrons.
+
+    Args:
+        smiles: SMILES string.
+
+    Returns:
+        True if any atom is a radical, False if none is, and None if the molecule
+        does not parse.
+
+    Example:
+        >>> has_radical('C[CH2]')
+        True
+    """
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return None
@@ -150,7 +241,17 @@ def has_radical(smiles):
 ################################################################################
 
 def generate(num_mols, ckpt, device, seed):
-    """Sample num_mols molecules unconditionally and return their raw SMILES."""
+    """Samples molecules unconditionally from the DrugDiff checkpoint.
+
+    Args:
+        num_mols: Number of molecules to sample.
+        ckpt: Path to the DrugDiff checkpoint.
+        device: Torch device to sample on (``'cpu'``, ``'cuda'`` or ``'mps'``).
+        seed: Random seed, applied with ``pytorch_lightning.seed_everything``.
+
+    Returns:
+        ``num_mols`` raw SMILES strings, not canonicalized or validity-filtered.
+    """
     import pytorch_lightning as pl
     pl.seed_everything(seed)
 
@@ -178,6 +279,7 @@ def generate(num_mols, ckpt, device, seed):
 ################################################################################
 
 def main():
+    """Generates molecules (or reuses a saved .csv), computes metrics, and writes the output files."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--num-mols', type=int, default=1000,
                         help='how many molecules to generate (default: 1000)')

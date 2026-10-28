@@ -42,7 +42,21 @@ MLP_DIMS = 2048
 
 
 def compile_warhead(pattern):
-    """Compile the warhead as SMARTS, falling back to SMILES."""
+    """Compiles a warhead pattern as SMARTS, falling back to SMILES.
+
+    Args:
+        pattern: Warhead written as SMARTS or SMILES.
+
+    Returns:
+        The compiled RDKit query molecule.
+
+    Raises:
+        SystemExit: If neither parser accepts ``pattern``.
+
+    Example:
+        >>> compile_warhead('C=CC(=O)N').GetNumAtoms()
+        5
+    """
     query = Chem.MolFromSmarts(pattern)
     if query is None:
         query = Chem.MolFromSmiles(pattern)
@@ -52,12 +66,24 @@ def compile_warhead(pattern):
 
 
 def load_seeds(path, query, n_seeds, smiles_column=None):
-    """
-    Collect seed molecules that contain the warhead.
+    """Collects seed molecules that contain the warhead.
 
-    Accepts a .csv (with a smiles column) or a plain one-SMILES-per-line .txt,
-    and keeps only molecules that actually match, since a seed without the
-    warhead says nothing about preserving it.
+    Only molecules that match the warhead are kept, since a seed without it says
+    nothing about preserving it. Reading stops once ``n_seeds`` have been found.
+
+    Args:
+        path: A .csv with a SMILES column, or a plain .txt with one SMILES per
+            line.
+        query: Compiled warhead query, as returned by ``compile_warhead``.
+        n_seeds: Maximum number of seeds to return.
+        smiles_column: SMILES column to read from a .csv. If None, uses
+            ``canonical_smiles`` when present, otherwise ``smiles``.
+
+    Returns:
+        A list of up to ``n_seeds`` SMILES strings, in file order.
+
+    Raises:
+        SystemExit: If a .csv has no usable SMILES column.
     """
     if str(path).endswith('.csv'):
         df = pd.read_csv(path)
@@ -81,11 +107,20 @@ def load_seeds(path, query, n_seeds, smiles_column=None):
 
 
 def encodable(model, smiles):
-    """
-    True if the SELFIES encoding fits the VAE's fixed length and vocabulary.
+    """Checks whether a molecule fits the VAE's fixed length and vocabulary.
 
-    smiles_to_indices pads up to max_len but does not truncate, and raises on an
-    unseen symbol, so longer or out-of-vocabulary molecules have to be dropped.
+    ``smiles_to_indices`` pads up to ``max_len`` but does not truncate, and raises
+    on an unseen symbol, so longer or out-of-vocabulary molecules have to be
+    dropped.
+
+    Args:
+        model: ``LatentDiffusion`` model providing ``smiles_to_indices`` and
+            ``max_len``.
+        smiles: SMILES string to test.
+
+    Returns:
+        True if the SELFIES encoding has exactly ``model.max_len`` tokens, and
+        False if it is the wrong length or encoding raises.
     """
     try:
         return len(model.smiles_to_indices(smiles)) == model.max_len
@@ -94,6 +129,7 @@ def encodable(model, smiles):
 
 
 def main():
+    """Noises warhead-bearing seeds to several timesteps, denoises them, and reports preservation."""
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--warhead', default='C=CC(=O)N',
@@ -136,7 +172,23 @@ def main():
     canonical_seeds = [Chem.CanonSmiles(s) for s in seeds]
 
     def evaluate(label, start_t, decoded):
-        """Score one batch of decoded molecules against their seeds."""
+        """Scores one batch of decoded molecules against their seeds.
+
+        Prints a one-line result and uses ``seeds``, ``canonical_seeds`` and
+        ``query`` from the enclosing scope.
+
+        Args:
+            label: Name of the condition, shown in the printed line and the
+                summary.
+            start_t: Timestep the seeds were noised to, or -1 for the VAE-only
+                control.
+            decoded: Output SMILES, one per seed and in the same order.
+
+        Returns:
+            A tuple ``(detail, summary)``. ``detail`` is a DataFrame with one row
+            per seed (validity, ``warhead_preserved``, ``molecule_changed``).
+            ``summary`` is a dict of counts and rates over the valid outputs.
+        """
         rows = []
         for seed, canon, out in zip(seeds, canonical_seeds, decoded):
             mol = Chem.MolFromSmiles(out)

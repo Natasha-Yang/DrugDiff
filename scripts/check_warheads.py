@@ -33,18 +33,28 @@ RDLogger.DisableLog('rdApp.*')
 
 
 def describe_match(mol, match, reference):
-    """
-    Describe how a matched substructure compares with the warhead as drawn.
+    """Describes how a matched substructure compares with the warhead as drawn.
 
-    Because a plain SMILES compiled as SMARTS puts no constraint on hydrogens,
-    a match may be a decorated version of the drawn fragment. Comparing the
-    hydrogen count of each matched atom against the reference fragment says
-    which it is. Note that a warhead is usually drawn with placeholder methyls
-    standing in for the rest of the molecule, so substitution is normal and is
-    not by itself a sign of a damaged warhead; radicals in or next to the match
-    are.
+    A plain SMILES compiled as SMARTS puts no constraint on hydrogens, so a match
+    may be a decorated version of the drawn fragment. Comparing the hydrogen count
+    of each matched atom against the reference fragment says which. Substitution
+    is normal, since warheads are usually drawn with placeholder methyls, and is
+    not by itself a sign of damage; radicals in or next to the match are.
 
-    Returns (n_substituted, radical_in_match, radical_adjacent).
+    Args:
+        mol: RDKit molecule that contains the match.
+        match: Atom indices in ``mol``, ordered like the query atoms, as returned
+            by ``mol.GetSubstructMatches``.
+        reference: The warhead pattern read as a plain molecule, or None if it is
+            SMARTS-only.
+
+    Returns:
+        A tuple ``(n_substituted, radical_in_match, radical_adjacent)``.
+        ``n_substituted`` is the number of matched atoms with fewer hydrogens than
+        their reference atom, or None if ``reference`` is None or its atom count
+        differs from the match. ``radical_in_match`` is True if any matched atom
+        has unpaired electrons, and ``radical_adjacent`` is True if any atom
+        bonded to the match (but outside it) does.
     """
     n_substituted = None
     if reference is not None and reference.GetNumAtoms() == len(match):
@@ -63,15 +73,26 @@ def describe_match(mol, match, reference):
 
 
 def load_warheads(path):
-    """
-    Parse the warhead file into a list of (line_no, pattern, query_mol, how, reference).
+    """Parses a warhead file into compiled query molecules.
 
-    'reference' is the pattern read as a plain molecule, used to tell an intact
-    warhead from a substituted one; it is None for patterns that are SMARTS-only.
+    Blank lines and lines starting with ``#`` are ignored. Duplicated patterns are
+    collapsed onto their first occurrence, and patterns that neither the SMARTS
+    nor the SMILES parser accepts are reported and skipped.
 
-    Duplicated patterns are collapsed onto their first occurrence, and patterns
-    that neither the SMARTS nor the SMILES parser accepts are reported and
-    skipped.
+    Args:
+        path: Text file with one SMARTS or SMILES pattern per line.
+
+    Returns:
+        A list of ``(line_no, pattern, query, how, reference)`` tuples, where
+        ``line_no`` is the 1-based line in the file, ``query`` is the compiled
+        RDKit query molecule, ``how`` is ``'smarts'`` or ``'smiles'`` depending on
+        which parser accepted the pattern, and ``reference`` is the pattern read
+        as a plain molecule (None for SMARTS-only patterns), used to tell an
+        intact warhead from a substituted one.
+
+    Example:
+        >>> load_warheads('warheads.txt')[0][:2]
+        (1, 'C=CC(=O)N')
     """
     warheads = []
     seen = {}
@@ -101,7 +122,26 @@ def load_warheads(path):
 
 
 def load_molecules(path, column=None):
-    """Read the molecules .csv and return (mol_id, smiles, mol) for parseable rows."""
+    """Reads a molecules .csv and parses the SMILES of each row.
+
+    Rows whose SMILES is missing or that RDKit cannot parse are skipped and
+    counted.
+
+    Args:
+        path: .csv file of molecules.
+        column: Name of the SMILES column. If None, ``canonical_smiles`` is used
+            when present, otherwise ``smiles``.
+
+    Returns:
+        A tuple ``(molecules, column, unparseable)``. ``molecules`` is a list of
+        ``(mol_id, smiles, mol)`` tuples, where ``mol_id`` comes from the
+        ``mol_id`` column if there is one and the row index otherwise.
+        ``column`` is the SMILES column that was read, and ``unparseable`` is the
+        number of rows skipped.
+
+    Raises:
+        SystemExit: If ``column`` is None and neither default column exists.
+    """
     df = pd.read_csv(path)
     if column is None:
         for candidate in ('canonical_smiles', 'smiles'):
@@ -118,7 +158,7 @@ def load_molecules(path, column=None):
         if not isinstance(smiles, str):
             unparseable += 1
             continue
-        mol = Chem.MolFromSmiles(smiles)
+        mol = Chem.MolFromSmiles(smiles) # convert into RDKit Mol
         if mol is None:
             unparseable += 1
             continue
@@ -127,6 +167,7 @@ def load_molecules(path, column=None):
 
 
 def main():
+    """Screens a .csv of generated molecules for warheads and writes the hits and summary."""
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--molecules', default=REPO_PATH + '/outputs/unconditional_1000_smiles.csv',
@@ -156,6 +197,7 @@ def main():
     hits = []
     for line_no, pattern, query, how, reference in warheads:
         for mol_id, smiles, mol in molecules:
+            # get tuples of the indices of the molecule’s atoms that match a substructure query
             matches = mol.GetSubstructMatches(query)
             if not matches:
                 continue
