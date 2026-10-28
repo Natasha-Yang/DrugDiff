@@ -461,7 +461,7 @@ class LatentDiffusion(pl.LightningModule):
                 # Log molecules every n steps if specified
                 if log_mols_every_n is not None and ((int(t[0]+1) % log_mols_every_n == 0) or int(t[0]) == 0):
                     # sampled_mols to smiles
-                    sampled_smiles = [self.one_hot_to_smiles(hot) for hot in sampled_mols]
+                    sampled_smiles = [self.one_hot_to_smiles(hot) for hot in sampled_mols.cpu()]
                     # save as csv named after mols-date-time:
                     sampled_smiles_df = pd.DataFrame(sampled_smiles, columns = ['smiles'])
 
@@ -838,7 +838,7 @@ class LatentDiffusion(pl.LightningModule):
                 mols_all = torch.cat((mols_all, sampled_mols))
 
                 # decode one-hot encodings to SMILES, translate into canonical SMILES and clean them (remove radicals, standardize)
-                sampled_smiles = [self.one_hot_to_smiles(hot) for hot in sampled_mols]
+                sampled_smiles = [self.one_hot_to_smiles(hot) for hot in sampled_mols.cpu()]
                 sampled_smiles_canonical = [Chem.MolToSmiles(Chem.MolFromSmiles(s), isomericSmiles = True) if Chem.MolFromSmiles(s) else s for s in sampled_smiles]
                 sampled_smiles_canonical = [self.clean_smiles(s) for s in sampled_smiles_canonical]
 
